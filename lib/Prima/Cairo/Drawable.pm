@@ -5,6 +5,7 @@ use Prima qw(Cairo);
 use vars qw(@ISA);
 @ISA = qw(Prima::Drawable);
 
+use constant M_PI => 3.14159265359;
 
 sub profile_default
 {
@@ -233,7 +234,58 @@ sub clipRect
 	}
 }	    
 
+# primitives
+sub arc
+{
+	my ($self, $x, $y, $dx, $dy, $start, $end) = @_;
+	my $cr = $self->context;
+	my $try = $dy / $dx;
+	my $rx = $dx / 2;
+	$cr->arc($x, $y, $rx, $start, $end );
+	$cr->stroke;
+}
 
+sub ellipse
+{
+	my ($self, $x, $y, $dx, $dy, $start, $end) = @_;
+	my $cr = $self->context;
+	my $try = $dy / $dx;
+	my $rx = $dx / 2;
+	$cr->arc($x, $y, $rx, 0.0, 2*M_PI);
+	$cr->stroke; 	
+}
+
+sub chord
+{
+	my ($self, $x, $y, $dx, $dy, $start, $end) = @_;
+	my $cr = $self->context;
+	my $rx = $dx / 2;
+	$cr->arc($x, $y, $rx, $start, $end);
+	$cr->stroke;
+}
+
+sub fill_chord
+{
+	my ($self, $x, $y, $dx, $dy, $start, $end) = @_;
+	my $cr = $self->context;
+	my $rx = $dx / 2;
+	$end -= $start;
+	my $F = $self->fillWinding ? 'winding' : 'even-odd';
+	$cr->set_fill_rule($F);
+	$cr->arc($x, $y, $rx, $start, $end);
+}
+
+sub fill_ellipse
+{
+	my ($self, $x, $y, $dx, $dy, $start, $end) = @_;
+	my $cr = $self->context;
+	my $try = $dy / $dx;
+	$cr->fill_preserve;
+	$cr->arc($x, $y, $rx, 0., 2 * M_PI);
+	$cr->fill;
+}
+
+	
 sub rectangle
 {
 	my ($self, $x1, $y1, $x2, $y2) = @_;
@@ -257,6 +309,18 @@ sub line
 	$cr->new_path;
 	$cr->move_to($x1,$y1);
 	$cr->line_to($x2,$y2);
+	$cr->stroke;
+}
+
+sub lines
+{
+	my ($self, $array) = @_;
+	my $cr = $self->context;
+	my $c = int( scalar @$array / 4 ) * 4;
+	for ( my $i = 0; $i < $c; $i += 4 ) {
+		$cr->move_to(@a[$i, $i+1]);
+		$cr->line_to(@a[$i+2,$i+3]);
+	}
 	$cr->stroke;
 }
 
