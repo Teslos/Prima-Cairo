@@ -1,7 +1,7 @@
 package Prima::Cairo::Drawable;
 use strict;
 use warnings;
-use Prima qw(Cairo);
+use Prima qw(Cairo StdBitmap);
 use vars qw(@ISA);
 @ISA = qw(Prima::Drawable);
 
@@ -18,6 +18,21 @@ sub profile_default
 	);
 	@$def{keys %prf} = values %prf;
 	return $def;
+}
+
+sub cmd_rgb
+{
+	my ( $r, $g, $b ) = (
+		int((($_[1] & 0xff0000) >> 16) * 100 / 256 + 0.5) / 100,
+		int((($_[1] & 0xff00) >> 8) * 100 / 256 + 0.5) / 100,
+		int(($_[1] & 0xff) * 100 / 256 + 0.5) / 100);
+	#print "Colors: $r, $g, $b \n";
+	unless ( $_[0]->{grayscale} ) {
+		return ( $r, $g, $b );
+	} else {
+		my $i = int( 100 * ( 0.31 * $r + 0.5 * $g + 0.18 * $b) + 0.5 ) / 100;
+		return $i;
+	}	
 }
 
 sub init
@@ -143,7 +158,7 @@ sub begin_paint
 	my $ok = $self->SUPER::begin_paint;
 	return $ok unless $ok;
 	$self->{can_draw}  = 1;
-	$self->{current} = {}
+	$self->{current} = {};
 	$self->$_( $self->{save_state}->{$_} ) for qw( 
 		color backColor fillPattern lineEnd linePattern lineWidth
 		rop rop2 textOpaque textOutBaseline font lineJoin fillWinding
@@ -176,6 +191,67 @@ sub end_paint_info
 	$self->restore_state;
 	delete $self->{changed};
 	return $self->SUPER::end_paint_info;
+}
+
+sub color
+{
+	return $_[0]->SUPER::color unless $#_;
+	$_[0]->SUPER::color($_[1]);
+	return unless $_[0]->{can_draw};
+	
+	my ($r,$g,$b) = $_[0]->cmd_rgb( $_[1] );
+	#print "Color: $r, $g, $b\n";
+	$_[0]->context->set_source_rgb($r, $g, $b);
+	$_[0]->{changed}->{fill} = 1;
+}
+
+sub fillPattern
+{
+	return $_[0]->SUPER::fillPattern unless $#_;
+	$_[0]->SUPER::fillPattern($_[1]);
+	return unless $_[0]->{can_draw};
+	my $self = $_[0];
+	my $cr = $self->context;
+	my @fp = @{$self->SUPER::fillPattern};
+	# this works only for black and white patterns
+	my $im = Prima::Image->new( width=>8, height=>8 );
+	$im->begin_paint;
+	$im->clear;
+	$im->fillPattern($_[1]);
+	$im->bar(0,0,8,8);
+	$im->end_paint;
+	$im->type(im::BW);
+	my $surface = Prima::Cairo::to_cairo_surface($im, 'a1');	
+	my $pattern = Cairo::SurfacePattern->create($surface);
+	$cr->set_source($pattern);
+	$pattern->set_extend('repeat');
+	$self->{changed}->{fill} = 1;	
+}
+
+sub linePattern
+{
+	return $_[0]->SUPER::linePattern unless $#_;
+	$_[0]->SUPER::linePattern($_[1]);
+	return unless $_[0]->{can_draw};
+	my $offset = -20;
+	my @dash = ();
+	#print "Line Pattern: ";
+	foreach (unpack("(a1)*", $_[1])) {
+		push( @dash, ord $_ );
+	}
+	#print "@dash\n";
+	
+	$_[0]->context->set_dash( $offset, @dash );	
+	$_[0]->{changed}->{linePattern} = 1;
+}
+
+sub lineWidth
+{
+	return $_[0]->SUPER::lineWidth unless $#_;
+	$_[0]->SUPER::lineWidth($_[1]);
+	return unless $_[0]->{can_draw};
+	$_[0]->context->set_line_width( $_[1] );
+	$_[0]->{changed}->{lineWidth} = 1;
 }
 
 sub end_paint
@@ -280,6 +356,7 @@ sub fill_ellipse
 	my ($self, $x, $y, $dx, $dy, $start, $end) = @_;
 	my $cr = $self->context;
 	my $try = $dy / $dx;
+	my $rx = $dx / 2;
 	$cr->fill_preserve;
 	$cr->arc($x, $y, $rx, 0., 2 * M_PI);
 	$cr->fill;
@@ -318,28 +395,59 @@ sub lines
 	my $cr = $self->context;
 	my $c = int( scalar @$array / 4 ) * 4;
 	for ( my $i = 0; $i < $c; $i += 4 ) {
-		$cr->move_to(@a[$i, $i+1]);
-		$cr->line_to(@a[$i+2,$i+3]);
+		$cr->move_to(@$array[$i, $i+1]);
+		$cr->line_to(@$array[$i+2,$i+3]);
 	}
 	$cr->stroke;
 }
 
-eval <<PROP for qw(color backColor fillPattern);
-sub $_
+sub polyline
 {
-	return \$_[0]-> SUPER::$_ unless \$#_;
-	\$_[0]-> SUPER::$_(\$_[1]);
-	return unless \$_[0]->{can_draw};
-	\$_[0]->{changed}->{fill} = 1;
+	my ($self, $array) = @_;
+	my $cr = $self->context;
+	my $i;
+	my $c = scalar @$array;
+	$c = int( $c / 2) * 2;
+	return if $c < 2;
+	$cr->move_to(@$array[0,1]);
+	for ($i = 2; $i < $c; $i += 2) {
+		$cr->rel_line_to(@$array[$i,$i+1]);
+	}
+	$cr->stroke;
 }
-PROP
+
+sub fillpoly
+{
+	my ($self, $array) = @_;
+	my $cr = $self->context;
+	my $i;
+	my $c = scalar @$array;
+	$c = int ($c / 2 ) * 2;
+	return if $c < 2;
+	$cr->move_to(@$array[0,1]);
+	for($i = 2; $i < $c; $i += 2) {
+		$cr->rel_line_to(@$array[$i, $i+1]);
+	}
+	my $F = $self->fillWinding ? "winding" : "even-odd";
+	$cr->fill_style($F);
+}
+	
+#eval <<PROP for qw(color backColor fillPattern);
+#sub $_
+#{
+#	return \$_[0]-> SUPER::$_ unless \$#_;
+#	\$_[0]-> SUPER::$_(\$_[1]);
+#	return unless \$_[0]->{can_draw};
+#	\$_[0]->{changed}->{fill} = 1;
+#}
+#PROP
 
 eval <<RASTER for qw(rop rop2);
 sub $_
 {
 	return \$_[0]-> SUPER::$_ unless \$#_;
 	my (\$self,\$rop) = \@_;
-	\$rop = rop::Copy if \$rop != rop::Whiteness && \$rop != rop::Blackness && \$rop != rop::NoOper;
+	\$rop = rop::CopyPut if \$rop != rop::Whiteness && \$rop != rop::Blackness && \$rop != rop::NoOper;
 	my \$old = \$self->SUPER::$_;
 	return if \$old == \$rop;
 	\$self-> SUPER::$_(\$rop);
@@ -379,7 +487,7 @@ sub _fill
 			$self->set_source_rgba(
 				int((($color & 0xff0000) >> 16) * 100 / 256 + 0.5) / 100, 
 				int((($color & 0xff00) >> 8) * 100 / 256 + 0.5) / 100, 
-				int(($color & 0xff)*100/256 + 0.5) / 100);
+				int(($color & 0xff)*100/256 + 0.5) / 100,
 				$self->alpha );
 		} elsif ( $rop != rop::NoOper && $rop2 != rop::NoOper ) {
 			# opaque pattern
@@ -398,13 +506,13 @@ sub _fill
 		} else {
 			# transparent pattern
 			if ($rop == rop::NoOper) {
-				$_ = ~$_ for @fp;
+				#$_ = ~$_ for @fp; not defined
 				$fc = $bc;
 			}				
 			$self->set_source_rgba(
 				int((($fc & 0xff0000) >> 16) * 100 / 256 + 0.5) / 100, 
 				int((($fc & 0xff00) >> 8) * 100 / 256 + 0.5) / 100, 
-				int(($fc & 0xff)*100/256 + 0.5) / 100);
+				int(($fc & 0xff)*100/256 + 0.5) / 100,
 				$self->alpha );
 			my $i = Prima::Image->new(
 				height   => 8,
